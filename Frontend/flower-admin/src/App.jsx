@@ -48,7 +48,21 @@ const DashboardView = ({ onLogout }) => {
   const fetchOrders = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:5000/api/orders");
+      const res = await fetch("http://72.62.243.238:5000/api/orders", {
+        method: "GET", // ระบุ method ให้ชัดเจน
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": "fl0w3rf0ry0ufl0w3rf0ry0u", // <--- รหัสต้องตรงกับที่ตั้งไว้ใน Server.js
+        },
+      });
+
+      // ตรวจสอบว่าถ้า Unauthorized (401) ให้แจ้งเตือน
+      if (res.status === 401) {
+        alert("คุณไม่มีสิทธิ์เข้าถึงข้อมูลนี้ (Invalid Admin Key)");
+        setLoading(false);
+        return;
+      }
+
       const data = await res.json();
       setOrders(data);
     } catch (err) {
@@ -72,9 +86,12 @@ const DashboardView = ({ onLogout }) => {
       return;
 
     try {
-      await fetch(`http://localhost:5000/api/orders/${orderId}/status`, {
+      await fetch(`http://72.62.243.238:5000/api/orders/${orderId}/status`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": "fl0w3rf0ry0ufl0w3rf0ry0u",
+        },
         body: JSON.stringify({ status }),
       });
       fetchOrders(); // โหลดข้อมูลใหม่เพื่ออัปเดตสถานะและซ่อนปุ่ม
@@ -163,7 +180,9 @@ const DashboardView = ({ onLogout }) => {
                     <td className="px-6 py-4">
                       <button
                         onClick={() =>
-                          window.open(`http://localhost:5000/${order.slipPath}`)
+                          window.open(
+                            `http://72.62.243.238:5000/${order.slipPath}`
+                          )
                         }
                         className="flex items-center gap-1 text-xs font-bold text-[#8A9A7B] hover:text-[#5D6D4E] transition-colors underline decoration-dotted"
                       >

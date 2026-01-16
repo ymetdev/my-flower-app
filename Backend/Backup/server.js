@@ -1,4 +1,3 @@
-require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const multer = require("multer");
@@ -6,33 +5,34 @@ const cors = require("cors");
 const path = require("path");
 const fs = require("fs");
 const nodemailer = require("nodemailer");
-const rateLimit = require("express-rate-limit");
-
-const mongoURI = process.env.MONGO_URI;
+const rateLimit = require("express-rate-limit"); // 1. นำเข้า Rate Limit
+// --- ดึงค่าจาก Environment Variable ที่ส่งมาจาก Docker ---
+// ถ้าไม่มีให้ใช้ค่า Default สำหรับรันเครื่องตัวเอง (localhost)
+const mongoURI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/flower_shop";
 const PORT = process.env.PORT || 5000;
 
 const app = express();
 app.set("trust proxy", 1);
-
 // --- Middleware ---
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// ปรับให้รองรับ path ใน container
 
 // Middleware สำหรับตรวจสอบสิทธิ์ Admin
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 const adminAuth = (req, res, next) => {
-  const adminKey = req.headers["x-admin-key"];
-  const SECRET_ADMIN_KEY = process.env.ADMIN_KEY;
+  const adminKey = req.headers["x-admin-key"]; // อ่านค่าจาก Header ชื่อ x-admin-key
+  const SECRET_ADMIN_KEY = "fl0w3rf0ry0ufl0w3rf0ry0u"; // ในอนาคตควรใช้ process.env.ADMIN_KEY
 
   if (adminKey === SECRET_ADMIN_KEY) {
-    next();
+    next(); // รหัสถูกต้อง ให้ไปต่อ
   } else {
     res
       .status(401)
       .json({ message: "Unauthorized: สิทธิ์เข้าถึงเฉพาะผู้ดูแลระบบเท่านั้น" });
   }
 };
-
 // --- 1. เชื่อมต่อ MongoDB ---
 mongoose
   .connect(mongoURI)
@@ -43,7 +43,7 @@ mongoose
     console.error(err);
   });
 
-// --- 2. Schema และ Model (เพิ่ม snapshotPath) ---
+// --- 2. Schema และ Model ---
 const orderSchema = new mongoose.Schema({
   orderId: String,
   orderTime: Date,
@@ -51,7 +51,6 @@ const orderSchema = new mongoose.Schema({
   items: Array,
   summary: Object,
   slipPath: String,
-  snapshotPath: String, // 🆕 เพิ่มฟิลด์สำหรับเก็บรูปของ
   status: { type: String, default: "pending" },
 });
 
@@ -61,15 +60,14 @@ const Order = mongoose.model("Order", orderSchema);
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: "flowerforyoushop.s@gmail.com",
+    pass: "ttof dhtq bhwi redx", // แนะนำให้ใช้ process.env.EMAIL_PASS ในอนาคต
   },
 });
-
 const notifyShopNewOrder = async (orderData) => {
   const mailOptions = {
     from: '"System Alert" <flowerforyoushop.s@gmail.com>',
-    to: "flowerforyoushop.s@gmail.com",
+    to: "flowerforyoushop.s@gmail.com", // อีเมลร้านค้า
     subject: `🔔 มีออเดอร์ใหม่เข้า! (#${orderData.orderId})`,
     html: `
       <div style="font-family: sans-serif; border: 1px solid #5D6D4E; padding: 20px; border-radius: 10px;">
@@ -95,15 +93,21 @@ const notifyShopNewOrder = async (orderData) => {
 };
 
 const orderLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
+  windowMs: 15 * 60 * 1000, // 15 นาที
+  max: 5, // จำกัด 5 ครั้งต่อ IP
   message: {
     message: "คุณทำรายการบ่อยเกินไป กรุณารอ 15 นาทีแล้วลองใหม่นะคะ",
   },
-  standardHeaders: true,
-  legacyHeaders: false,
+  standardHeaders: true, // ส่งค่า RateLimit-Limit ใน header
+  legacyHeaders: false, // ปิด Header รุ่นเก่า (X-RateLimit)
 });
 
+// --- Middleware ---
+app.use(cors());
+app.use(express.json());
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ฟังก์ชันสำหรับส่งอีเมล
 const sendOrderStatusEmail = async (orderData, status) => {
   const isApproved = status === "approved";
   const shippingCost = 50;
@@ -201,25 +205,22 @@ const sendOrderStatusEmail = async (orderData, status) => {
   }
 };
 
-// --- 4. Multer Configuration (รองรับทั้ง Slip และ Snapshot) ---
-const createStorage = (folderName) => {
-  return multer.diskStorage({
-    destination: (req, file, cb) => {
-      const dir = `./uploads/${folderName}`;
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      cb(null, dir);
-    },
-    filename: (req, file, cb) => {
-      const ext = path.extname(file.originalname);
-      const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e3);
-      cb(null, uniqueSuffix + ext);
-    },
-  });
-};
-
-const uploadSlip = multer({
-  storage: createStorage("slips"),
-  limits: { fileSize: 5 * 1024 * 1024 },
+// --- 4. Multer & Routes ---
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = "./uploads/slips";
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e3);
+    cb(null, uniqueSuffix + ext);
+  },
+});
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // จำกัดไว้ที่ 5MB
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
@@ -229,28 +230,13 @@ const uploadSlip = multer({
   },
 });
 
-// 🆕 Multer สำหรับรูป Snapshot (รูปของที่จะส่ง)
-const uploadSnapshot = multer({
-  storage: createStorage("snapshots"),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) {
-      cb(null, true);
-    } else {
-      cb(new Error("รองรับเฉพาะไฟล์รูปภาพเท่านั้น!"), false);
-    }
-  },
-});
-
-// --- 5. Routes ---
-
-// API สำหรับสร้าง Order (ลูกค้าส่งสลิป)
 app.post(
   "/api/orders",
   orderLimiter,
   (req, res, next) => {
-    uploadSlip.single("slip")(req, res, (err) => {
+    upload.single("slip")(req, res, (err) => {
       if (err) {
+        // ดัก Error จาก Multer (ไฟล์ใหญ่เกิน หรือไม่ใช่รูป)
         return res.status(400).json({ message: err.message });
       }
       next();
@@ -258,6 +244,7 @@ app.post(
   },
   async (req, res) => {
     try {
+      // 1. ป้องกันการ Crash จาก JSON.parse
       let orderData;
       try {
         orderData = JSON.parse(req.body.orderData);
@@ -268,10 +255,12 @@ app.post(
           .json({ message: "รูปแบบข้อมูล Order ไม่ถูกต้อง" });
       }
 
+      // 2. ตรวจสอบข้อมูลที่จำเป็น (Basic Validation)
       if (!orderData || !orderData.orderId) {
         return res.status(400).json({ message: "ข้อมูล Order ไม่ครบถ้วน" });
       }
 
+      // 3. สร้างและบันทึกข้อมูล
       const newOrder = new Order({
         ...orderData,
         slipPath: req.file ? req.file.path.replace(/\\/g, "/") : null,
@@ -279,70 +268,25 @@ app.post(
 
       await newOrder.save();
 
+      // 4. แจ้งเตือนร้านค้า (Background Job - ไม่ต้อง await เพื่อให้ลูกค้าได้รับคำตอบเร็วขึ้น)
       notifyShopNewOrder(newOrder).catch((err) =>
         console.error("Notify Shop Error:", err)
       );
 
+      // 5. ตอบกลับลูกค้า
       res.status(201).json({
         message: "Order saved!",
         orderId: newOrder.orderId,
       });
     } catch (error) {
+      // ดักจับ Error อื่นๆ เช่น MongoDB ต่อไม่ติด
       console.error("Save Order Error:", error);
       res.status(500).json({ message: "เกิดข้อผิดพลาดภายในระบบ" });
     }
   }
 );
 
-// 🆕 API สำหรับอัปโหลดรูป Snapshot (Admin ใช้งาน)
-app.post(
-  "/api/orders/:orderId/snapshot",
-  adminAuth,
-  (req, res, next) => {
-    uploadSnapshot.single("snapshot")(req, res, (err) => {
-      if (err) {
-        return res.status(400).json({ message: err.message });
-      }
-      next();
-    });
-  },
-  async (req, res) => {
-    try {
-      const { orderId } = req.params;
-
-      if (!req.file) {
-        return res.status(400).json({ message: "กรุณาอัปโหลดรูปภาพ" });
-      }
-
-      const order = await Order.findOne({ orderId: orderId });
-
-      if (!order) {
-        // ลบไฟล์ที่อัปโหลดถ้าไม่พบ Order
-        fs.unlinkSync(req.file.path);
-        return res.status(404).json({ message: "ไม่พบคำสั่งซื้อนี้" });
-      }
-
-      // ลบรูปเก่าถ้ามี
-      if (order.snapshotPath && fs.existsSync(order.snapshotPath)) {
-        fs.unlinkSync(order.snapshotPath);
-      }
-
-      // อัปเดต path ใหม่
-      order.snapshotPath = req.file.path.replace(/\\/g, "/");
-      await order.save();
-
-      res.json({
-        message: "อัปโหลดรูปสำเร็จ",
-        snapshotPath: order.snapshotPath,
-      });
-    } catch (error) {
-      console.error("Upload Snapshot Error:", error);
-      res.status(500).json({ message: "เกิดข้อผิดพลาดในการอัปโหลด" });
-    }
-  }
-);
-
-// API สำหรับ Tracking (ตรวจสอบสถานะคำสั่งซื้อ)
+// --- 5. API สำหรับ Tracking (ตรวจสอบสถานะคำสั่งซื้อ) ---
 app.get("/api/orders/track/:orderId", async (req, res) => {
   try {
     const { orderId } = req.params;
@@ -354,9 +298,11 @@ app.get("/api/orders/track/:orderId", async (req, res) => {
       });
     }
 
+    // จัดรูปแบบข้อมูลรายการดอกไม้ให้ดูง่าย
     const flowerList = order.items.map((item) => ({
       name: item.name,
       price: item.price,
+      // ถ้ามีจำนวน (quantity) ในข้อมูลให้เพิ่มตรงนี้ด้วย
     }));
 
     res.json({
@@ -364,12 +310,11 @@ app.get("/api/orders/track/:orderId", async (req, res) => {
       status: order.status,
       customerName: order.customerInfo.name,
       orderTime: order.orderTime,
-      flowers: flowerList,
+      flowers: flowerList, // รายการดอกไม้ที่สั่ง
       summary: {
         totalPrice: order.summary.totalPrice,
-        shippingCost: 50,
+        shippingCost: 50, // ค่าส่งที่ตั้งไว้
       },
-      snapshotPath: order.snapshotPath || null, // 🆕 ส่ง path รูปของไปด้วย
     });
   } catch (error) {
     console.error("Tracking Error:", error);
@@ -377,8 +322,8 @@ app.get("/api/orders/track/:orderId", async (req, res) => {
   }
 });
 
-// API สำหรับดึงข้อมูล Orders ทั้งหมด (Admin)
 app.get("/api/orders", adminAuth, async (req, res) => {
+  console.log("Client IP:", req.ip);
   try {
     const orders = await Order.find().sort({ orderTime: -1 });
     res.json(orders);
@@ -387,7 +332,6 @@ app.get("/api/orders", adminAuth, async (req, res) => {
   }
 });
 
-// API สำหรับอัปเดตสถานะ Order
 app.patch("/api/orders/:id/status", adminAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -407,36 +351,6 @@ app.patch("/api/orders/:id/status", adminAuth, async (req, res) => {
     res.json({ message: `Status updated to ${status} and email sent.` });
   } catch (error) {
     res.status(500).json({ message: "Update failed" });
-  }
-});
-
-// 🆕 API สำหรับลบรูป Snapshot (Admin)
-app.delete("/api/orders/:orderId/snapshot", adminAuth, async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const order = await Order.findOne({ orderId: orderId });
-
-    if (!order) {
-      return res.status(404).json({ message: "ไม่พบคำสั่งซื้อนี้" });
-    }
-
-    if (!order.snapshotPath) {
-      return res.status(404).json({ message: "ไม่มีรูป Snapshot" });
-    }
-
-    // ลบไฟล์จริง
-    if (fs.existsSync(order.snapshotPath)) {
-      fs.unlinkSync(order.snapshotPath);
-    }
-
-    // ลบ path ใน Database
-    order.snapshotPath = null;
-    await order.save();
-
-    res.json({ message: "ลบรูป Snapshot สำเร็จ" });
-  } catch (error) {
-    console.error("Delete Snapshot Error:", error);
-    res.status(500).json({ message: "เกิดข้อผิดพลาดในการลบรูป" });
   }
 });
 
